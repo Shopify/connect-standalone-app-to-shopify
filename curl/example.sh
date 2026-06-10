@@ -27,7 +27,7 @@ curl -X POST \
 # Step 4: Make an authenticated GraphQL Admin API request.
 # Replace {access_token} with the token from the exchange response.
 curl -X POST \
-  https://${SHOP}/admin/api/2025-01/graphql.json \
+  https://${SHOP}/admin/api/2026-04/graphql.json \
   -H 'Content-Type: application/json' \
   -H "X-Shopify-Access-Token: {access_token}" \
   -d '{"query": "{ products(first: 5) { edges { node { id handle } } } }"}'
