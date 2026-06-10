@@ -88,7 +88,7 @@ app.get('/callback', async (req, res) => {
 app.get('/products', async (req, res) => {
   const { shop, access_token } = req.query;
 
-  const response = await fetch(`https://${shop}/admin/api/2025-01/graphql.json`, {
+  const response = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
