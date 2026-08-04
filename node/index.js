@@ -100,7 +100,7 @@ app.get('/callback', async (req, res) => {
   // [END oauth.exchange-code]
 
   // [START oauth.confirm-scopes]
-    const granted = scope.split(',');
+  const granted = scope.split(',');
   // A write_* grant includes its matching read_* scope, so Shopify may return
   // only the write scope. Treat a requested read_* as satisfied by its write_*.
   const missing = SCOPES.split(',').filter(s =>
