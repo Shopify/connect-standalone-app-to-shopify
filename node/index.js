@@ -5,7 +5,9 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const COOKIE_SECRET = process.env.COOKIE_SECRET;
+// Falls back to a random secret for local dev. Set COOKIE_SECRET in production
+// so signed cookies stay valid across restarts and deployments.
+const COOKIE_SECRET = process.env.COOKIE_SECRET || crypto.randomBytes(64).toString('hex');
 
 const app = express();
 app.use(cookieParser(COOKIE_SECRET));
