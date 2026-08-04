@@ -100,7 +100,13 @@ app.get('/callback', async (req, res) => {
   // [END oauth.exchange-code]
 
   // [START oauth.confirm-scopes]
-  const missing = SCOPES.split(',').filter(s => !scope.split(',').includes(s));
+    const granted = scope.split(',');
+  // A write_* grant includes its matching read_* scope, so Shopify may return
+  // only the write scope. Treat a requested read_* as satisfied by its write_*.
+  const missing = SCOPES.split(',').filter(s =>
+    !granted.includes(s) &&
+    !(s.startsWith('read_') && granted.includes(`write_${s.slice(5)}`))
+  );
   if (missing.length > 0) return res.status(403).send(`Missing scopes: ${missing.join(', ')}`);
   // [END oauth.confirm-scopes]
 
