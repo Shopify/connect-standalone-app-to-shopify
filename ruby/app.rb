@@ -81,7 +81,7 @@ get '/callback' do
   # [END oauth.exchange-code]
 
   # [START oauth.confirm-scopes]
-    granted = scope.split(',')
+  granted = scope.split(',')
   # A write_* grant includes its matching read_* scope, so Shopify may return
   # only the write scope. Treat a requested read_* as satisfied by its write_*.
   missing = SCOPES.split(',').reject do |s|
