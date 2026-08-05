@@ -20,6 +20,14 @@ const SCOPES = process.env.SCOPES || 'read_products,write_orders';
 // In-memory token store (use a database in production)
 const tokenStore = {};
 
+// Send cookies only over HTTPS in production; over plain HTTP on localhost in dev.
+const cookieOptions = {
+  signed: true,
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+};
+
 function isValidShopDomain(shop) {
   return /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/.test(shop);
 }
@@ -34,7 +42,7 @@ app.get('/install', (req, res) => {
 
   const nonce = crypto.randomBytes(16).toString('hex');
   // Store the nonce in a signed cookie so you can verify it against the callback
-  res.cookie('oauth_state', nonce, {signed: true, httpOnly: true, sameSite: 'lax'});
+  res.cookie('oauth_state', nonce, cookieOptions);
 
   const authUrl = `https://${shop}/admin/oauth/authorize?` +
     new URLSearchParams({
@@ -114,7 +122,7 @@ app.get('/callback', async (req, res) => {
   tokenStore[shop] = { access_token, refresh_token };
 
   // Set a signed session cookie so subsequent requests can identify the shop
-  res.cookie('shop', shop, {signed: true, httpOnly: true, sameSite: 'lax'});
+  res.cookie('shop', shop, cookieOptions);
   res.json({ message: 'App installed', shop, scope });
 });
 
