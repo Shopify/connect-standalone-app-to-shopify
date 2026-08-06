@@ -24,6 +24,7 @@ use Rack::Session::Cookie,
 
 # In-memory token store (use a database in production)
 token_store = {}
+
 # A valid expiring-token response includes expires_in (seconds until the token
 # expires). Return nil when it's absent or non-positive: treat the token as
 # non-expiring and never refresh it, rather than computing an immediate expiry
@@ -111,8 +112,7 @@ get '/callback' do
   token_store[shop] = {
     access_token: access_token,
     refresh_token: refresh_token,
-  expires_at: expires_at_from(expires_in)
-  }
+    expires_at: expires_at_from(expires_in)  }
 
   # Store the shop in the signed server-side session
   session[:shop] = shop
