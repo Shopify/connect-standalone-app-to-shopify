@@ -111,7 +111,7 @@ get '/callback' do
   token_store[shop] = {
     access_token: access_token,
     refresh_token: refresh_token,
-   expires_at: expires_at_from(expires_in)
+  expires_at: expires_at_from(expires_in)
   }
 
   # Store the shop in the signed server-side session
