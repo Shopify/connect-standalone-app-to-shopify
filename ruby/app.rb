@@ -106,12 +106,18 @@ get '/callback' do
   JSON.generate({ message: 'App installed', shop: shop, scope: scope })
 end
 
-# Exchange the stored refresh token for a new access token. Returns false when
-# the refresh token is terminal (expired, revoked, or replayed outside the
-# one-hour retry window), so the caller can send the merchant back through OAuth.
+# Exchange the stored refresh token for a new access token. The return value
+# tells the caller how to react, and matches the refresh error handling used
+# across grant types:
+#   :refreshed   - got a new access token
+#   :reauthorize - a 401 means the refresh token is terminal (expired, revoked,
+#                  replayed after the one-hour retry window, or the app was
+#                  uninstalled); send the merchant back through OAuth
+#   :retry       - a transient failure (network, timeout, 5xx, 429); safe to
+#                  retry later with the same refresh token
 def refresh_access_token(shop, token_store)
   stored = token_store[shop]
-  return false unless stored && stored[:refresh_token]
+  return :reauthorize unless stored && stored[:refresh_token]
 
   uri = URI("https://#{shop}/admin/oauth/access_token")
   response = Net::HTTP.post_form(uri, {
@@ -124,9 +130,9 @@ def refresh_access_token(shop, token_store)
   # A 401 is terminal: drop the dead token so the merchant reinstalls.
   if response.is_a?(Net::HTTPUnauthorized)
     token_store.delete(shop)
-    return false
+    return :reauthorize
   end
-  return false unless response.is_a?(Net::HTTPSuccess)
+  return :retry unless response.is_a?(Net::HTTPSuccess)
 
   data = JSON.parse(response.body)
   token_store[shop] = {
@@ -134,7 +140,7 @@ def refresh_access_token(shop, token_store)
     refresh_token: data['refresh_token'],
     expires_at: Time.now.to_i + data['expires_in'].to_i
   }
-  true
+  :refreshed
 end
 
 # [START oauth.make-request]
@@ -144,10 +150,14 @@ get '/products' do
   stored = token_store[shop]
   halt 401, 'Not authenticated' unless stored
 
-  # Expiring access tokens are short-lived. If this one has expired, use the
-  # stored refresh token to get a new one before calling the API.
-  if Time.now.to_i >= stored[:expires_at]
-    halt 401, 'Reauthorization required' unless refresh_access_token(shop, token_store)
+  # Expiring access tokens are short-lived. Refresh ~60 seconds before the token
+  # actually expires so a request never goes out with a token that lapses
+  # mid-flight.
+  if Time.now.to_i >= stored[:expires_at] - 60
+    case refresh_access_token(shop, token_store)
+    when :reauthorize then halt 401, 'Reauthorization required'
+    when :retry then halt 503, 'Token refresh failed, try again'
+    end
     stored = token_store[shop]
   end
 
