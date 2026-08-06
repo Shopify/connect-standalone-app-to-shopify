@@ -24,6 +24,14 @@ use Rack::Session::Cookie,
 
 # In-memory token store (use a database in production)
 token_store = {}
+# A valid expiring-token response includes expires_in (seconds until the token
+# expires). Return nil when it's absent or non-positive: treat the token as
+# non-expiring and never refresh it, rather than computing an immediate expiry
+# that would send a token with no refresh_token through a doomed refresh.
+def expires_at_from(expires_in)
+  seconds = expires_in.to_i
+  seconds.positive? ? Time.now.to_i + seconds : nil
+end
 
 def valid_shop_domain?(shop)
   shop.to_s.match?(/\A[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com\z/)
@@ -103,7 +111,7 @@ get '/callback' do
   token_store[shop] = {
     access_token: access_token,
     refresh_token: refresh_token,
-    expires_at: Time.now.to_i + expires_in.to_i
+   expires_at: expires_at_from(expires_in)
   }
 
   # Store the shop in the signed server-side session
@@ -145,7 +153,7 @@ def refresh_access_token(shop, token_store)
   token_store[shop] = {
     access_token: data['access_token'],
     refresh_token: data['refresh_token'],
-    expires_at: Time.now.to_i + data['expires_in'].to_i
+    expires_at: expires_at_from(data['expires_in'])
   }
   :refreshed
 end
@@ -160,7 +168,7 @@ get '/products' do
   # Expiring access tokens are short-lived. Refresh ~60 seconds before the token
   # actually expires so a request never goes out with a token that lapses
   # mid-flight.
-  if Time.now.to_i >= stored[:expires_at] - 60
+  if stored[:expires_at] && Time.now.to_i >= stored[:expires_at] - 60
     case refresh_access_token(shop, token_store)
     when :reauthorize then halt 401, 'Reauthorization required'
     when :retry then halt 503, 'Token refresh failed, try again'
