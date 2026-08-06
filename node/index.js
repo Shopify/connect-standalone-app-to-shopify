@@ -123,12 +123,18 @@ app.get('/callback', async (req, res) => {
   res.json({ message: 'App installed', shop, scope });
 });
 
-// Exchange the stored refresh token for a new access token. Returns false when
-// the refresh token is terminal (expired, revoked, or replayed outside the
-// one-hour retry window), so the caller can send the merchant back through OAuth.
+// Exchange the stored refresh token for a new access token. The return value
+// tells the caller how to react, and matches the refresh error handling used
+// across grant types:
+//   'refreshed'   — got a new access token
+//   'reauthorize' — a 401 means the refresh token is terminal (expired, revoked,
+//                   replayed after the one-hour retry window, or the app was
+//                   uninstalled); send the merchant back through OAuth
+//   'retry'       — a transient failure (network, timeout, 5xx, 429); safe to
+//                   retry later with the same refresh token
 async function refreshAccessToken(shop) {
   const stored = tokenStore[shop];
-  if (!stored?.refresh_token) return false;
+  if (!stored?.refresh_token) return 'reauthorize';
 
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
@@ -146,9 +152,9 @@ async function refreshAccessToken(shop) {
 
   if (response.status === 401) {
     delete tokenStore[shop];
-    return false;
+    return 'reauthorize';
   }
-  if (!response.ok) return false;
+  if (!response.ok) return 'retry';
 
   const { access_token, refresh_token, expires_in } = await response.json();
   tokenStore[shop] = {
@@ -156,7 +162,7 @@ async function refreshAccessToken(shop) {
     refresh_token,
     expires_at: Date.now() + expires_in * 1000,
   };
-  return true;
+  return 'refreshed';
 }
 
 // [START oauth.make-request]
@@ -167,11 +173,16 @@ app.get('/products', async (req, res) => {
   let stored = tokenStore[shop];
   if (!stored) return res.status(401).send('Not authenticated');
 
-  // Expiring access tokens are short-lived. If this one has expired, use the
-  // stored refresh token to get a new one before calling the API.
-  if (Date.now() >= stored.expires_at) {
-    if (!(await refreshAccessToken(shop))) {
+  // Expiring access tokens are short-lived. Refresh ~60 seconds before the token
+  // actually expires so a request never goes out with a token that lapses
+  // mid-flight.
+  if (Date.now() >= stored.expires_at - 60 * 1000) {
+    const result = await refreshAccessToken(shop);
+    if (result === 'reauthorize') {
       return res.status(401).send('Reauthorization required');
+    }
+    if (result === 'retry') {
+      return res.status(503).send('Token refresh failed, try again');
     }
     stored = tokenStore[shop];
   }
