@@ -12,20 +12,14 @@ CLIENT_SECRET = ENV['SHOPIFY_CLIENT_SECRET']
 REDIRECT_URI = ENV['REDIRECT_URI']
 SCOPES = ENV.fetch('SCOPES', 'read_products,write_orders')
 
-# Send the session cookie only over HTTPS in production; over plain HTTP on
-# localhost in dev. httponly + same_site protect it the rest of the time.
-use Rack::Session::Cookie,
-    key: 'rack.session',
-    secret: ENV.fetch('SESSION_SECRET') { SecureRandom.hex(64) },
-    secure: ENV['RACK_ENV'] == 'production',
-    httponly: true,
-    same_site: :lax
+enable :sessions
+set :session_secret, ENV.fetch('SESSION_SECRET') { SecureRandom.hex(64) }
 
 # In-memory token store (use a database in production)
 token_store = {}
 
 def valid_shop_domain?(shop)
-  shop.to_s.match?(/\A[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com\z/)
+  shop.match?(/\A[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com\z/)
 end
 
 # [START oauth.build-authorization-url]
@@ -83,6 +77,7 @@ get '/callback' do
   data = JSON.parse(http_response.body)
   access_token = data['access_token']
   refresh_token = data['refresh_token']
+  expires_in = data['expires_in']
   scope = data['scope']
   # [END oauth.exchange-code]
 
@@ -96,8 +91,13 @@ get '/callback' do
   halt 403, "Missing scopes: #{missing.join(', ')}" unless missing.empty?
   # [END oauth.confirm-scopes]
 
-  # Store tokens server-side, keyed by shop (use a database in production)
-  token_store[shop] = { access_token: access_token, refresh_token: refresh_token }
+  # Store tokens server-side, keyed by shop (use a database in production).
+  # Track when the access token expires so requests can refresh it in time.
+  token_store[shop] = {
+    access_token: access_token,
+    refresh_token: refresh_token,
+    expires_at: Time.now.to_i + expires_in.to_i
+  }
 
   # Store the shop in the signed server-side session
   session[:shop] = shop
@@ -106,12 +106,50 @@ get '/callback' do
   JSON.generate({ message: 'App installed', shop: shop, scope: scope })
 end
 
+# Exchange the stored refresh token for a new access token. Returns false when
+# the refresh token is terminal (expired, revoked, or replayed outside the
+# one-hour retry window), so the caller can send the merchant back through OAuth.
+def refresh_access_token(shop, token_store)
+  stored = token_store[shop]
+  return false unless stored && stored[:refresh_token]
+
+  uri = URI("https://#{shop}/admin/oauth/access_token")
+  response = Net::HTTP.post_form(uri, {
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: stored[:refresh_token]
+  })
+
+  # A 401 is terminal: drop the dead token so the merchant reinstalls.
+  if response.is_a?(Net::HTTPUnauthorized)
+    token_store.delete(shop)
+    return false
+  end
+  return false unless response.is_a?(Net::HTTPSuccess)
+
+  data = JSON.parse(response.body)
+  token_store[shop] = {
+    access_token: data['access_token'],
+    refresh_token: data['refresh_token'],
+    expires_at: Time.now.to_i + data['expires_in'].to_i
+  }
+  true
+end
+
 # [START oauth.make-request]
 get '/products' do
   shop = session[:shop]
   halt 401, 'Not authenticated' unless shop
   stored = token_store[shop]
   halt 401, 'Not authenticated' unless stored
+
+  # Expiring access tokens are short-lived. If this one has expired, use the
+  # stored refresh token to get a new one before calling the API.
+  if Time.now.to_i >= stored[:expires_at]
+    halt 401, 'Reauthorization required' unless refresh_access_token(shop, token_store)
+    stored = token_store[shop]
+  end
 
   uri = URI("https://#{shop}/admin/api/2026-04/graphql.json")
   http = Net::HTTP.new(uri.host, uri.port)
