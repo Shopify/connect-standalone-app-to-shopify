@@ -20,6 +20,23 @@ const SCOPES = process.env.SCOPES || 'read_products,write_orders';
 // In-memory token store (use a database in production)
 const tokenStore = {};
 
+// Send cookies only over HTTPS in production; over plain HTTP on localhost in
+// dev. httpOnly + sameSite protect them the rest of the time.
+const cookieOptions = {
+  signed: true,
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+};
+
+// A valid expiring-token response always includes expires_in (seconds until the
+// access token expires). Guard against a malformed response: treat a missing
+// value as already-expired so the next request refreshes, rather than storing
+// NaN — which compares false everywhere and would silently disable refresh.
+function expiresAtFrom(expiresIn) {
+  return Date.now() + (Number(expiresIn) || 0) * 1000;
+}
+
 function isValidShopDomain(shop) {
   return /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/.test(shop);
 }
@@ -34,7 +51,7 @@ app.get('/install', (req, res) => {
 
   const nonce = crypto.randomBytes(16).toString('hex');
   // Store the nonce in a signed cookie so you can verify it against the callback
-  res.cookie('oauth_state', nonce, {signed: true, httpOnly: true, sameSite: 'lax'});
+  res.cookie('oauth_state', nonce, cookieOptions);
 
   const authUrl = `https://${shop}/admin/oauth/authorize?` +
     new URLSearchParams({
@@ -115,11 +132,11 @@ app.get('/callback', async (req, res) => {
   tokenStore[shop] = {
     access_token,
     refresh_token,
-    expires_at: Date.now() + expires_in * 1000,
+    expires_at: expiresAtFrom(expires_in),
   };
 
   // Set a signed session cookie so subsequent requests can identify the shop
-  res.cookie('shop', shop, {signed: true, httpOnly: true, sameSite: 'lax'});
+  res.cookie('shop', shop, cookieOptions);
   res.json({ message: 'App installed', shop, scope });
 });
 
@@ -160,7 +177,7 @@ async function refreshAccessToken(shop) {
   tokenStore[shop] = {
     access_token,
     refresh_token,
-    expires_at: Date.now() + expires_in * 1000,
+    expires_at: expiresAtFrom(expires_in),
   };
   return 'refreshed';
 }
