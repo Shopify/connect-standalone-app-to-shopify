@@ -29,12 +29,13 @@ const cookieOptions = {
   secure: process.env.NODE_ENV === 'production',
 };
 
-// A valid expiring-token response always includes expires_in (seconds until the
-// access token expires). Guard against a malformed response: treat a missing
-// value as already-expired so the next request refreshes, rather than storing
-// NaN — which compares false everywhere and would silently disable refresh.
+// A valid expiring-token response includes expires_in (seconds until the access
+// token expires). Return null when it's absent or non-positive: treat the token
+// as non-expiring and never refresh it. Storing Date.now() instead would make
+// the next request refresh a token that has no refresh_token — a permanent 401.
 function expiresAtFrom(expiresIn) {
-  return Date.now() + (Number(expiresIn) || 0) * 1000;
+  const seconds = Number(expiresIn);
+  return seconds > 0 ? Date.now() + seconds * 1000 : null;
 }
 
 function isValidShopDomain(shop) {
@@ -193,7 +194,7 @@ app.get('/products', async (req, res) => {
   // Expiring access tokens are short-lived. Refresh ~60 seconds before the token
   // actually expires so a request never goes out with a token that lapses
   // mid-flight.
-  if (Date.now() >= stored.expires_at - 60 * 1000) {
+   if (stored.expires_at && Date.now() >= stored.expires_at - 60 * 1000) {
     const result = await refreshAccessToken(shop);
     if (result === 'reauthorize') {
       return res.status(401).send('Reauthorization required');
