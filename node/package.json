@@ -1,0 +1,27 @@
+{
+  "name": "node",
+  "version": "1.0.0",
+  "description": "Node.js sample for connecting a standalone app to Shopify with the OAuth authorization code grant and expiring access tokens.",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"No tests specified\""
+  },
+  "keywords": [
+    "shopify",
+    "oauth",
+    "authorization-code-grant",
+    "access-token"
+  ],
+  "author": "Shopify",
+  "license": "MIT",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  }
+}
