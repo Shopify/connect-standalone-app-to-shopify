@@ -20,14 +20,6 @@ const SCOPES = process.env.SCOPES || 'read_products,write_orders';
 // In-memory token store (use a database in production)
 const tokenStore = {};
 
-// Send cookies only over HTTPS in production; over plain HTTP on localhost in dev.
-const cookieOptions = {
-  signed: true,
-  httpOnly: true,
-  sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
-};
-
 function isValidShopDomain(shop) {
   return /^[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com$/.test(shop);
 }
@@ -42,7 +34,7 @@ app.get('/install', (req, res) => {
 
   const nonce = crypto.randomBytes(16).toString('hex');
   // Store the nonce in a signed cookie so you can verify it against the callback
-  res.cookie('oauth_state', nonce, cookieOptions);
+  res.cookie('oauth_state', nonce, {signed: true, httpOnly: true, sameSite: 'lax'});
 
   const authUrl = `https://${shop}/admin/oauth/authorize?` +
     new URLSearchParams({
@@ -104,7 +96,7 @@ app.get('/callback', async (req, res) => {
     return res.status(403).send('Token exchange failed');
   }
 
-  const { access_token, refresh_token, scope } = await tokenResponse.json();
+  const { access_token, refresh_token, scope, expires_in } = await tokenResponse.json();
   // [END oauth.exchange-code]
 
   // [START oauth.confirm-scopes]
@@ -118,21 +110,71 @@ app.get('/callback', async (req, res) => {
   if (missing.length > 0) return res.status(403).send(`Missing scopes: ${missing.join(', ')}`);
   // [END oauth.confirm-scopes]
 
-  // Store tokens server-side, keyed by shop (use a database in production)
-  tokenStore[shop] = { access_token, refresh_token };
+  // Store tokens server-side, keyed by shop (use a database in production).
+  // Track when the access token expires so requests can refresh it in time.
+  tokenStore[shop] = {
+    access_token,
+    refresh_token,
+    expires_at: Date.now() + expires_in * 1000,
+  };
 
   // Set a signed session cookie so subsequent requests can identify the shop
-  res.cookie('shop', shop, cookieOptions);
+  res.cookie('shop', shop, {signed: true, httpOnly: true, sameSite: 'lax'});
   res.json({ message: 'App installed', shop, scope });
 });
+
+// Exchange the stored refresh token for a new access token. Returns false when
+// the refresh token is terminal (expired, revoked, or replayed outside the
+// one-hour retry window), so the caller can send the merchant back through OAuth.
+async function refreshAccessToken(shop) {
+  const stored = tokenStore[shop];
+  if (!stored?.refresh_token) return false;
+
+  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: 'refresh_token',
+      refresh_token: stored.refresh_token,
+    }),
+  });
+
+  if (response.status === 401) {
+    delete tokenStore[shop];
+    return false;
+  }
+  if (!response.ok) return false;
+
+  const { access_token, refresh_token, expires_in } = await response.json();
+  tokenStore[shop] = {
+    access_token,
+    refresh_token,
+    expires_at: Date.now() + expires_in * 1000,
+  };
+  return true;
+}
 
 // [START oauth.make-request]
 app.get('/products', async (req, res) => {
   const shop = req.signedCookies.shop;
   if (!shop) return res.status(401).send('Not authenticated');
 
-  const stored = tokenStore[shop];
+  let stored = tokenStore[shop];
   if (!stored) return res.status(401).send('Not authenticated');
+
+  // Expiring access tokens are short-lived. If this one has expired, use the
+  // stored refresh token to get a new one before calling the API.
+  if (Date.now() >= stored.expires_at) {
+    if (!(await refreshAccessToken(shop))) {
+      return res.status(401).send('Reauthorization required');
+    }
+    stored = tokenStore[shop];
+  }
 
   const response = await fetch(`https://${shop}/admin/api/2026-04/graphql.json`, {
     method: 'POST',
