@@ -1,5 +1,6 @@
 # ruby/app.rb
 require 'sinatra'
+require 'rack/session/cookie'
 require 'dotenv/load'
 require 'net/http'
 require 'json'
@@ -12,14 +13,20 @@ CLIENT_SECRET = ENV['SHOPIFY_CLIENT_SECRET']
 REDIRECT_URI = ENV['REDIRECT_URI']
 SCOPES = ENV.fetch('SCOPES', 'read_products,write_orders')
 
-enable :sessions
-set :session_secret, ENV.fetch('SESSION_SECRET') { SecureRandom.hex(64) }
+# Send the session cookie only over HTTPS in production; over plain HTTP on
+# localhost in dev. httponly + same_site protect it the rest of the time.
+use Rack::Session::Cookie,
+    key: 'rack.session',
+    secret: ENV.fetch('SESSION_SECRET') { SecureRandom.hex(64) },
+    secure: ENV['RACK_ENV'] == 'production',
+    httponly: true,
+    same_site: :lax
 
 # In-memory token store (use a database in production)
 token_store = {}
 
 def valid_shop_domain?(shop)
-  shop.match?(/\A[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com\z/)
+  shop.to_s.match?(/\A[a-zA-Z0-9][a-zA-Z0-9\-]*\.myshopify\.com\z/)
 end
 
 # [START oauth.build-authorization-url]
