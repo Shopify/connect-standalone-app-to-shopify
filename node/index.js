@@ -194,7 +194,7 @@ app.get('/products', async (req, res) => {
   // Expiring access tokens are short-lived. Refresh ~60 seconds before the token
   // actually expires so a request never goes out with a token that lapses
   // mid-flight.
-   if (stored.expires_at && Date.now() >= stored.expires_at - 60 * 1000) {
+  if (stored.expires_at && Date.now() >= stored.expires_at - 60 * 1000) {
     const result = await refreshAccessToken(shop);
     if (result === 'reauthorize') {
       return res.status(401).send('Reauthorization required');
